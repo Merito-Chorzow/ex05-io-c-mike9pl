@@ -6,6 +6,8 @@ typedef struct {
     float setpoint;
     unsigned ticks;
     unsigned broken_lines; // linie ucięte przez overflow
+    unsigned rate;         // co ile ticków wypisywać status (0=wyłączone)
+    unsigned rate_counter; // licznik do rate
 } shell_t;
 
 void shell_init(shell_t* sh);

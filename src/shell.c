@@ -8,11 +8,20 @@ static void tx_str(shell_t* sh, const char* s){
     while (*s) rb_put(&sh->tx, (uint8_t)*s++);
 }
 
+static void print_status(shell_t* sh){
+    char buf[96];
+    snprintf(buf,sizeof(buf),"set=%.3f ticks=%u drop=%zu broken=%u\r\n",
+        sh->setpoint, sh->ticks, sh->rx.dropped, sh->broken_lines);
+    tx_str(sh, buf);
+}
+
 void shell_init(shell_t* sh){
     rb_init(&sh->rx); rb_init(&sh->tx);
     sh->setpoint = 0.0f;
     sh->ticks = 0;
     sh->broken_lines = 0;
+    sh->rate = 0;
+    sh->rate_counter = 0;
     tx_str(sh, "READY\r\n");
 }
 
@@ -31,10 +40,7 @@ static void process_line(shell_t* sh, const char* line){
         char buf[64]; snprintf(buf,sizeof(buf),"OK set=%.3f\r\n", v);
         tx_str(sh, buf);
     } else if (strncmp(line,"get",3)==0){
-        char buf[96];
-        snprintf(buf,sizeof(buf),"set=%.3f ticks=%u drop=%zu broken=%u\r\n",
-            sh->setpoint, sh->ticks, sh->rx.dropped, sh->broken_lines);
-        tx_str(sh, buf);
+        print_status(sh);
     } else if (strncmp(line,"stat",4)==0){
         char buf[96];
         snprintf(buf,sizeof(buf),"rx_free=%zu tx_free=%zu rx_count=%zu\r\n",
@@ -44,6 +50,12 @@ static void process_line(shell_t* sh, const char* line){
         tx_str(sh, "ECHO ");
         tx_str(sh, line+5);
         tx_str(sh, "\r\n");
+    } else if (strncmp(line,"rate ",5)==0){
+        unsigned v = (unsigned)strtoul(line+5, NULL, 10);
+        sh->rate = v;
+        sh->rate_counter = 0;
+        char buf[64]; snprintf(buf,sizeof(buf),"OK rate=%u\r\n", v);
+        tx_str(sh, buf);
     } else {
         tx_str(sh, "ERR\r\n");
     }
@@ -74,9 +86,22 @@ void shell_tick(shell_t* sh){
         }
     }
 
-    // heurystyka: jeśli był overflow (rx.dropped>0) i nie domknęliśmy linii,
-    // a w kolejnych tickach pojawia się początek nowej komendy — rośnie broken_lines.
+    // Jeśli wystąpiło przepełnienie i mamy w buforze niekompletną linię,
+    // to jest to "złamana linia". Oznaczamy ją i czyścimy bufor,
+    // aby być gotowym na przyjęcie kolejnej, potencjalnie poprawnej komendy.
     (void)saw_newline;
+    if (rb_had_overflow(&sh->rx) && n > 0) {
+        sh->broken_lines++;
+        n = 0;
+    }
+
+    // Obsługa okresowego statusu
+    if (sh->rate > 0) {
+        if (++sh->rate_counter >= sh->rate) {
+            sh->rate_counter = 0;
+            print_status(sh);
+        }
+    }
 
     // "wysyłka" — w urządzeniu byłby UART; tu wypisujemy na stdout
     while (rb_get(&sh->tx, &b)) { putchar((char)b); }
